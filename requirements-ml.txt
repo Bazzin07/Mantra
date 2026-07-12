@@ -1,0 +1,11 @@
+# Optional ML/NLP dependencies.
+# Install these only when enabling sentence-transformers or spaCy-backed NLP.
+
+spacy>=3.8.0
+sentence-transformers>=3.3.0
+scikit-learn>=1.6.0
+numpy>=1.26.0
+
+# CPU-only Torch wheels may require the PyTorch index on some platforms:
+# python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.5.0

@@ -1,0 +1,17 @@
+.git
+.env
+*.env
+backend/.env
+.local
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+node_modules
+dist
+build
+coverage
+*.db
+*.sqlite
