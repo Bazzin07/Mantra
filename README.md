@@ -72,13 +72,3 @@ docker compose up -d api
 ```
 
 The Compose stack starts PostgreSQL, Redis, and the API. Runtime secrets are loaded from `backend/.env` and are not copied into the image.
-
-## Current Status
-
-Scope is the first two features only — **Universal Document Ingestion & Knowledge Graph** and **Expert Knowledge Copilot** — hardened toward production before any later feature (RCA, compliance, failure intelligence, frontend) is started.
-
-The backend has been locally and container tested for ingestion, knowledge graph retrieval, cited copilot answers, PostgreSQL migrations, Redis exact cache, semantic cache, and live NVIDIA rerank/answer-generation integration.
-
-Retrieval scoring is unified across the SQLite and PostgreSQL backends on a single `[0, 1]` scale with shared confidence thresholds (`backend/app/services/scoring.py`), so ranking and confidence are consistent in every environment. Equipment tags resolve consistently across coded and spelled-out forms (`P-101A`, `P101A`, and `Pump 101-A` all resolve to `P101A`).
-
-Real industrial benchmark documents are still needed before claiming production-grade answer accuracy.
