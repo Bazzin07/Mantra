@@ -15,24 +15,38 @@ ENTITY_PATTERNS: List[Tuple[str, re.Pattern, float]] = [
     ),
     ("REGULATORY_REF", re.compile(r"\b(?:OISD[-\s]?\d+|PESO|FACTORY\s+ACT|ISO[-\s]?\d+(?::\d{4})?)\b", re.IGNORECASE), 0.9),
     ("PART_NUMBER", re.compile(r"\b[A-Z]{2,5}-\d{3,6}(?:-[A-Z0-9]{1,6})?\b"), 0.82),
-    ("EQUIPMENT_TAG", re.compile(r"\b[A-Z]{1,4}-?\d{2,5}[A-Z]?(?=\b|[a-z])"), 0.88),
+    # ponytail: all-caps prefix + [-#\s] separator catches coded tags and
+    # instrument tags ("P-101A", "PSV #504", "PT 12"). The all-caps requirement is
+    # the false-positive guard; tighten the prefix set if prose noise appears.
+    ("EQUIPMENT_TAG", re.compile(r"\b[A-Z]{1,4}[-#\s]{0,2}\d{2,5}[A-Z]?(?=\b|[a-z])"), 0.88),
     ("DATE", re.compile(r"\b(?:\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}-\d{2}-\d{2})\b"), 0.8),
 ]
 
 FAILURE_TERMS = [
     "bearing failure",
+    "blockage",
     "cavitation",
     "corrosion",
+    "crack",
+    "explosion",
+    "fire",
+    "fouling",
+    "ignition",
     "leakage",
     "overheating",
+    "overpressure",
     "pressure drop",
+    "rupture",
     "seal failure",
     "vibration",
 ]
 
 PERSON_PATTERN = re.compile(
-    r"\b(?:Technician|Operator|Engineer|Inspector|Supervisor|Manager|Foreman|Fitter|Electrician|Mechanic|Welder|Contractor)\s+"
-    r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b"
+    # [ \t]+, not \s+: a newline after the name means the next line's field
+    # label (e.g. "Supervisor Vikram Nair\nSummary:") would otherwise get
+    # swallowed as a third name word ("Vikram Nair Summary").
+    r"\b(?:Technician|Operator|Engineer|Inspector|Supervisor|Manager|Foreman|Fitter|Electrician|Mechanic|Welder|Contractor)[ \t]+"
+    r"([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){0,2})\b"
 )
 
 # --- Equipment ontology (site-calibratable) ----------------------------------
@@ -195,10 +209,10 @@ class IndustrialEntityExtractor:
                     )
                 )
 
-        lowered = text.lower()
         for term in FAILURE_TERMS:
-            start = lowered.find(term)
-            if start == -1:
+            # Word-boundary match so "fire" doesn't fire on "firewall" / "crack" on "cracked".
+            match = re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE)
+            if not match:
                 continue
             entities.append(
                 ExtractedEntity(
@@ -206,7 +220,7 @@ class IndustrialEntityExtractor:
                     document_id=document_id,
                     chunk_id=chunk_id,
                     entity_type="FAILURE_MODE",
-                    text=text[start : start + len(term)],
+                    text=match.group(0),
                     normalized_text=normalize_entity("FAILURE_MODE", term),
                     confidence=0.78,
                 )

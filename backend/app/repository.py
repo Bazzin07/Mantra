@@ -79,6 +79,8 @@ class Repository(Protocol):
 
     async def build_graph_for_entity(self, entity_type: str, raw_value: str) -> KnowledgeGraph: ...
 
+    async def documents_for_entity(self, entity_type: str, raw_value: str) -> List[DocumentResponse]: ...
+
 
 class InMemoryRepository:
     """Test/development repository with the same async contract as durable storage."""
@@ -186,7 +188,12 @@ class InMemoryRepository:
 
     async def build_graph_for_entity(self, entity_type: str, raw_value: str) -> KnowledgeGraph:
         normalized = normalize_graph_value(entity_type, raw_value)
-        documents = [
+        documents = await self.documents_for_entity(entity_type, raw_value)
+        return build_graph_for_documents(documents, required_entity=(entity_type, normalized))
+
+    async def documents_for_entity(self, entity_type: str, raw_value: str) -> List[DocumentResponse]:
+        normalized = normalize_graph_value(entity_type, raw_value)
+        return [
             document
             for document in self.documents.values()
             if any(
@@ -194,7 +201,6 @@ class InMemoryRepository:
                 for entity in document.entities
             )
         ]
-        return build_graph_for_documents(documents, required_entity=(entity_type, normalized))
 
 
 class SqlAlchemyRepository:
@@ -449,6 +455,11 @@ class SqlAlchemyRepository:
 
     async def build_graph_for_entity(self, entity_type: str, raw_value: str) -> KnowledgeGraph:
         normalized = normalize_graph_value(entity_type, raw_value)
+        documents = await self.documents_for_entity(entity_type, raw_value)
+        return build_graph_for_documents(documents, required_entity=(entity_type, normalized))
+
+    async def documents_for_entity(self, entity_type: str, raw_value: str) -> List[DocumentResponse]:
+        normalized = normalize_graph_value(entity_type, raw_value)
         async with self.session_factory() as session:
             result = await session.execute(
                 select(DocumentRecord)
@@ -459,8 +470,7 @@ class SqlAlchemyRepository:
                 )
                 .distinct()
             )
-            documents = [document_record_to_model(record) for record in result.scalars().unique().all()]
-        return build_graph_for_documents(documents, required_entity=(entity_type, normalized))
+            return [document_record_to_model(record) for record in result.scalars().unique().all()]
 
     async def _one_document(self, query: Select[Tuple[DocumentRecord]]) -> Optional[DocumentResponse]:
         documents = await self._all_documents(query)

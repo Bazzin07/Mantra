@@ -9,14 +9,25 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings, get_settings
 from .database import create_engine_and_session_factory, initialize_database
-from .errors import EntityNotFoundError, UploadTooLargeError
-from .models import AuditEvent, CopilotQuery, CopilotResponse, DocumentResponse, KnowledgeGraph
+from .errors import UploadTooLargeError
+from .models import (
+    AuditEvent,
+    CopilotQuery,
+    CopilotResponse,
+    DocumentResponse,
+    EquipmentHealthReport,
+    FailureClusterReport,
+    KnowledgeGraph,
+    MaintenancePrediction,
+    RCAReport,
+)
 from .repository import InMemoryRepository, Repository, SqlAlchemyRepository
 from .services.copilot import CopilotService
 from .services.embeddings import create_embedding_provider
 from .services.exact_cache import create_exact_cache
 from .services.ingestion import IngestionService
 from .services.model_providers import create_model_providers
+from .services.rca import RCAService
 from .services.parsers import DependencyUnavailableError, DocumentParseError, UnsupportedFormatError
 from .storage import create_storage_backend, sanitize_filename
 
@@ -26,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 def create_app(settings: Optional[Settings] = None, repository: Optional[Repository] = None) -> FastAPI:
     settings = settings or get_settings()
+
+    # Fail closed: production must not boot with the data API unauthenticated.
+    if settings.environment == "production" and not (settings.require_api_key and settings.api_key):
+        raise RuntimeError("Production requires IKI_REQUIRE_API_KEY=true and IKI_API_KEY set")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -64,6 +79,9 @@ def create_app(settings: Optional[Settings] = None, repository: Optional[Reposit
             reranker_provider=reranker_provider,
             safety_provider=safety_provider,
             exact_cache=create_exact_cache(settings.redis_url),
+        )
+        app.state.rca = RCAService(
+            app_repository, embedding_provider, settings=settings, llm_provider=llm_provider
         )
         yield
         if engine is not None:
@@ -180,12 +198,32 @@ def create_app(settings: Optional[Settings] = None, repository: Optional[Reposit
     async def equipment_graph(equipment_tag: str) -> KnowledgeGraph:
         graph = await app.state.repository.build_graph_for_entity("EQUIPMENT_TAG", equipment_tag)
         if not graph.nodes:
-            raise HTTPException(status_code=EntityNotFoundError.status_code, detail="Equipment tag not found")
+            raise HTTPException(status_code=404, detail="Equipment tag not found")
         return graph
 
     @app.post("/api/copilot/ask", response_model=CopilotResponse, dependencies=[Depends(require_api_key)])
     async def ask_copilot(query: CopilotQuery) -> CopilotResponse:
         return await app.state.copilot.answer(query.question, limit=query.limit)
+
+    @app.post("/api/maintenance/rca/{equipment_id}", response_model=RCAReport, dependencies=[Depends(require_api_key)])
+    async def rca_for_equipment(equipment_id: str) -> RCAReport:
+        return await app.state.rca.rca("EQUIPMENT_TAG", equipment_id)
+
+    @app.get("/api/maintenance/health/{equipment_id}", response_model=EquipmentHealthReport, dependencies=[Depends(require_api_key)])
+    async def equipment_health(equipment_id: str) -> EquipmentHealthReport:
+        return await app.state.rca.health(equipment_id)
+
+    @app.get("/api/maintenance/predictions", response_model=list[MaintenancePrediction], dependencies=[Depends(require_api_key)])
+    async def maintenance_predictions() -> list[MaintenancePrediction]:
+        return await app.state.rca.predictions()
+
+    @app.get("/api/maintenance/clusters", response_model=FailureClusterReport, dependencies=[Depends(require_api_key)])
+    async def failure_clusters() -> FailureClusterReport:
+        return await app.state.rca.cluster_failures()
+
+    @app.post("/api/maintenance/investigate", response_model=RCAReport, dependencies=[Depends(require_api_key)])
+    async def investigate(query: CopilotQuery) -> RCAReport:
+        return await app.state.rca.investigate(query.question)
 
     return app
 

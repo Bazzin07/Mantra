@@ -111,3 +111,64 @@ class SemanticCacheEntry(BaseModel):
     retrieved_chunk_count: int
     query_type: str
     cache_metadata: Dict[str, str] = Field(default_factory=dict)
+
+
+class RCALink(BaseModel):
+    """One hop in a causal chain, e.g. `equipment_tag:P101A -> failure_mode:bearing failure`."""
+
+    source_id: str
+    source_label: str
+    target_id: str
+    target_label: str
+    relationship: str
+    link_confidence: float = Field(ge=0.0, le=1.0)
+    signals: Dict[str, float] = Field(default_factory=dict)
+    citations: List[Citation] = Field(default_factory=list)
+
+
+class RCAChain(BaseModel):
+    links: List[RCALink]
+    chain_confidence: float = Field(ge=0.0, le=1.0)
+    confidence_label: str
+    chain_type: str  # direct_similarity | indirect_ripple | cross_domain_impact
+    amplifications_applied: List[str] = Field(default_factory=list)
+
+
+class RCAReport(BaseModel):
+    seed: str
+    chains: List[RCAChain]
+    narrative: str
+    generation_status: str = "deterministic"
+    model_used: Optional[str] = None
+
+
+class EquipmentHealthReport(BaseModel):
+    equipment_tag: str
+    document_count: int
+    document_types: List[str]
+    failure_history: List[str]
+    open_procedures: List[str]
+    related_parts: List[str]
+    timeline: List[Dict[str, str]]  # [{date, event, source_document}]
+    summary: str
+
+
+class FailureCluster(BaseModel):
+    cluster_id: int
+    failure_terms: List[str]
+    member_count: int
+    representative_excerpt: str
+    document_filenames: List[str]
+
+
+class FailureClusterReport(BaseModel):
+    available: bool
+    reason: Optional[str] = None
+    clusters: List[FailureCluster] = Field(default_factory=list)
+
+
+class MaintenancePrediction(BaseModel):
+    equipment_tag: str
+    recommendation: str
+    urgency: str  # low | medium | high
+    justification: List[str]  # historical failures cited as evidence

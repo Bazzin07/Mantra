@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+import math
 from dataclasses import dataclass
 from typing import List, Protocol, Tuple
 
 import httpx
+
+
+def _sigmoid(x: float) -> float:
+    # Numerically stable; maps a rerank logit to (0, 1) without overflow.
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    z = math.exp(x)
+    return z / (1.0 + z)
 
 from ..config import Settings
 from ..models import Citation, DocumentChunk, DocumentResponse
@@ -31,10 +41,6 @@ class SafetyProvider(Protocol):
     async def is_allowed(self, text: str) -> bool: ...
 
 
-class DocumentParseProvider(Protocol):
-    async def parse(self, filename: str, payload: bytes) -> str: ...
-
-
 @dataclass
 class NvidiaClient:
     settings: Settings
@@ -43,17 +49,30 @@ class NvidiaClient:
         if not self.settings.nvidia_api_key:
             raise RuntimeError("NVIDIA API key is not configured")
         base_url = self.settings.nvidia_base_url.rstrip("/")
+        url = path if path.startswith("http") else f"{base_url}/{path.lstrip('/')}"
+        headers = {
+            "Authorization": f"Bearer {self.settings.nvidia_api_key}",
+            "Content-Type": "application/json",
+        }
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{base_url}/{path.lstrip('/')}",
-                headers={
-                    "Authorization": f"Bearer {self.settings.nvidia_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
+            # The shared integrate endpoint 503s / times out intermittently under
+            # load; one backoff retry recovers most of them before the caller's
+            # deterministic fallback kicks in.
+            # ponytail: fixed 2 attempts + 0.5s backoff; use tenacity if a real
+            # retry policy (jitter, budgets) is ever needed.
+            for attempt in range(2):
+                try:
+                    response = await client.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    return response.json()
+                except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                    retryable = status is None or status >= 500
+                    if attempt == 0 and retryable:
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
+            raise RuntimeError("unreachable")
 
 
 class DeterministicLLMProvider:
@@ -135,13 +154,12 @@ class NvidiaRerankerProvider:
     ) -> List[Tuple[float, DocumentResponse, DocumentChunk]]:
         if not candidates:
             return candidates
-        passages = [chunk.content for _, _, chunk in candidates]
         data = await self.client.post(
-            "/ranking",
+            self.settings.rerank_url,
             {
                 "model": self.settings.rerank_model,
-                "query": question,
-                "passages": passages,
+                "query": {"text": question},
+                "passages": [{"text": chunk.content} for _, _, chunk in candidates],
             },
         )
         rankings = data.get("rankings") or data.get("data") or []
@@ -152,7 +170,12 @@ class NvidiaRerankerProvider:
             index = int(item.get("index", item.get("passage_index", 0)))
             if index < 0 or index >= len(candidates):
                 continue
-            score = float(item.get("score", item.get("relevance_score", candidates[index][0])))
+            raw = item.get("logit")
+            # Normalize logits to (0,1) so citation scores stay on the same scale
+            # as the other retrieval paths; other response shapes are already 0–1.
+            score = _sigmoid(float(raw)) if raw is not None else float(
+                item.get("score", item.get("relevance_score", candidates[index][0]))
+            )
             _, document, chunk = candidates[index]
             scored.append((score, document, chunk))
         return scored or candidates
@@ -182,15 +205,6 @@ class NvidiaSafetyProvider:
         )
         content = data["choices"][0]["message"]["content"].strip().upper()
         return "UNSAFE" not in content
-
-
-class NvidiaDocumentParseProvider:
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-        self.client = NvidiaClient(settings)
-
-    async def parse(self, filename: str, payload: bytes) -> str:
-        raise NotImplementedError("nemotron-parse integration is reserved for parser fallback wiring")
 
 
 def create_model_providers(settings: Settings) -> tuple[LLMProvider, RerankerProvider, SafetyProvider]:

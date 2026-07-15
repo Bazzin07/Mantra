@@ -41,20 +41,22 @@ class Settings(BaseSettings):
     # the shared endpoint, so the copilot silently fell back to deterministic
     # answers. These defaults use verified fast, capable models. Restore frontier
     # models here once a dedicated NIM/production deployment serves them.
-    rerank_model: str = "nvidia/llama-3.2-nv-rerankqa-1b-v2"  # separate /ranking NIM; verify per deployment (falls back gracefully)
+    rerank_model: str = "nvidia/rerank-qa-mistral-4b"
+    rerank_url: str = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"  # reranking lives on ai.api host, not the integrate base
     utility_model: str = "meta/llama-3.1-8b-instruct"
     default_answer_model: str = "deepseek-ai/deepseek-v4-flash"
     baseline_answer_model: str = "meta/llama-3.1-8b-instruct"
     escalation_model: str = "deepseek-ai/deepseek-v4-flash"
     long_context_model: str = "deepseek-ai/deepseek-v4-flash"
-    agentic_model: str = "moonshotai/kimi-k2.6"
     safety_model: str = "nvidia/llama-3.1-nemoguard-8b-content-safety"
-    parse_model: str = "nvidia/nemotron-parse"
     prompt_version: str = "copilot-rag-v1"
     semantic_cache_threshold: float = 0.92
     redis_url: str = ""
     graph_max_nodes: int = 5000
     copilot_default_limit: int = 5
+    rca_max_hops: int = 3
+    rca_top_chains: int = 3
+    rca_temporal_window_days: int = 90
 
     @property
     def cors_origin_list(self) -> List[str]:

@@ -268,7 +268,10 @@ class CopilotService:
 
     async def _write_cache(self, state: CopilotState) -> CopilotState:
         response = state["response"]
-        if not response.citations:
+        # Only cache real LLM answers. Degraded fallbacks (NVIDIA 5xx, safety
+        # block) still carry citations but must not stick in the cache and be
+        # re-served as if they were the model's answer.
+        if not response.citations or response.generation_status != "llm":
             return state
         await self.exact_cache.set(state["cache_key"], response)
         entry = SemanticCacheEntry(
