@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from dataclasses import dataclass
-from typing import List, Protocol, Tuple
+from typing import AsyncIterator, List, Protocol, Tuple
 
 import httpx
 
@@ -27,6 +28,14 @@ class LLMProvider(Protocol):
         model_name: str,
         query_type: str,
     ) -> str: ...
+
+    def generate_answer_stream(
+        self,
+        question: str,
+        citations: List[Citation],
+        model_name: str,
+        query_type: str,
+    ) -> AsyncIterator[str]: ...
 
 
 class RerankerProvider(Protocol):
@@ -74,6 +83,35 @@ class NvidiaClient:
                     raise
             raise RuntimeError("unreachable")
 
+    async def stream_post(self, path: str, payload: dict) -> AsyncIterator[str]:
+        # ponytail: no retry here, unlike post() — a partially-consumed SSE
+        # stream can't be safely retried without either duplicating already-
+        # yielded tokens or discarding real partial output. A mid-stream
+        # failure propagates and the caller (CopilotService.stream) falls
+        # back to the deterministic template, same as the non-streaming path.
+        if not self.settings.nvidia_api_key:
+            raise RuntimeError("NVIDIA API key is not configured")
+        base_url = self.settings.nvidia_base_url.rstrip("/")
+        url = path if path.startswith("http") else f"{base_url}/{path.lstrip('/')}"
+        headers = {
+            "Authorization": f"Bearer {self.settings.nvidia_api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", url, headers=headers, json={**payload, "stream": True}) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    chunk = json.loads(data)
+                    delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                    text = delta.get("content")
+                    if text:
+                        yield text
+
 
 class DeterministicLLMProvider:
     async def generate_answer(
@@ -91,6 +129,46 @@ class DeterministicLLMProvider:
             f"Query type: {query_type}. Question: {question}"
         )
 
+    async def generate_answer_stream(
+        self,
+        question: str,
+        citations: List[Citation],
+        model_name: str,
+        query_type: str,
+    ) -> AsyncIterator[str]:
+        # The deterministic template has the whole answer instantly — one
+        # chunk is honest here, not a fabricated incremental delay.
+        yield await self.generate_answer(question, citations, model_name, query_type)
+
+
+def _build_chat_payload(question: str, citations: List[Citation], model_name: str, query_type: str) -> dict:
+    evidence = "\n\n".join(
+        f"[{index + 1}] {citation.filename} page {citation.page_number}: {citation.excerpt}"
+        for index, citation in enumerate(citations)
+    )
+    return {
+        "model": model_name,
+        "temperature": 0.1,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are an industrial knowledge copilot. Answer only from the provided evidence. "
+                    "If evidence is insufficient, say what is missing. Do not invent RCA, compliance, or safety claims."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Query type: {query_type}\n"
+                    f"Question: {question}\n\n"
+                    f"Evidence:\n{evidence}\n\n"
+                    "Write a concise answer and refer to evidence numbers where relevant."
+                ),
+            },
+        ],
+    }
+
 
 class NvidiaLLMProvider:
     def __init__(self, settings: Settings) -> None:
@@ -103,34 +181,20 @@ class NvidiaLLMProvider:
         model_name: str,
         query_type: str,
     ) -> str:
-        evidence = "\n\n".join(
-            f"[{index + 1}] {citation.filename} page {citation.page_number}: {citation.excerpt}"
-            for index, citation in enumerate(citations)
-        )
-        payload = {
-            "model": model_name,
-            "temperature": 0.1,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an industrial knowledge copilot. Answer only from the provided evidence. "
-                        "If evidence is insufficient, say what is missing. Do not invent RCA, compliance, or safety claims."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Query type: {query_type}\n"
-                        f"Question: {question}\n\n"
-                        f"Evidence:\n{evidence}\n\n"
-                        "Write a concise answer and refer to evidence numbers where relevant."
-                    ),
-                },
-            ],
-        }
+        payload = _build_chat_payload(question, citations, model_name, query_type)
         data = await self.client.post("/chat/completions", payload)
         return data["choices"][0]["message"]["content"].strip()
+
+    async def generate_answer_stream(
+        self,
+        question: str,
+        citations: List[Citation],
+        model_name: str,
+        query_type: str,
+    ) -> AsyncIterator[str]:
+        payload = _build_chat_payload(question, citations, model_name, query_type)
+        async for piece in self.client.stream_post("/chat/completions", payload):
+            yield piece
 
 
 class NoOpRerankerProvider:

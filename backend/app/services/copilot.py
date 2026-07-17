@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import List, Optional, Tuple, TypedDict
+from typing import AsyncIterator, Dict, List, Optional, Tuple, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -74,6 +74,99 @@ class CopilotService:
     async def answer(self, question: str, limit: int = 5) -> CopilotResponse:
         state = await self.graph.ainvoke({"question": question, "limit": limit})
         return state["response"]
+
+    async def stream(self, question: str, limit: int = 5) -> AsyncIterator[Dict]:
+        """FR-16, SSE-friendly: calls the same prepare/check_cache/retrieve/
+        rerank node functions the non-streaming graph uses directly (not via
+        the compiled graph), so retrieval logic isn't duplicated — only
+        generation diverges (incremental vs. one blocking call). Yields
+        {"type": "token", "text": ...} as text arrives, then one final
+        {"type": "done", ...} frame with citations/confidence.
+
+        Known limitation, by necessity: the non-streaming path can run a
+        safety check on the *complete* answer and swap in a safe fallback
+        before the caller ever sees it. A token stream can't retroactively
+        un-send tokens already delivered to the client, so this path skips
+        the post-hoc safety gate — the same fundamental constraint every
+        token-streaming LLM integration has. Documented, not silently
+        dropped: see ENGINEERING_AUDIT.md.
+        """
+        state: CopilotState = {"question": question, "limit": limit}
+        state = await self._prepare(state)
+        state = await self._check_cache(state)
+        if "response" in state:
+            response = state["response"]
+            if response.answer:
+                yield {"type": "token", "text": response.answer}
+            yield {
+                "type": "done",
+                "citations": [c.model_dump() for c in response.citations],
+                "confidence": response.confidence,
+                "model_used": response.model_used,
+                "generation_status": response.generation_status,
+                "cache_status": response.cache_status,
+            }
+            return
+
+        state = await self._retrieve(state)
+        state = await self._rerank(state)
+
+        scored_chunks = state.get("scored_chunks", [])
+        confidence = confidence_from_score(state.get("retrieval_confidence_score", 0.0))
+        if not scored_chunks or confidence == "none":
+            yield {"type": "token", "text": "I could not find indexed evidence for that question yet."}
+            yield {
+                "type": "done", "citations": [], "confidence": "none", "model_used": None,
+                "generation_status": "skipped_no_evidence", "cache_status": state["cache_status"],
+            }
+            return
+
+        citations = build_citations(scored_chunks)
+        model_name = select_model(state["query_type"], self.settings, confidence)
+
+        pieces: List[str] = []
+        try:
+            async for piece in self.llm_provider.generate_answer_stream(question, citations, model_name, state["query_type"]):
+                pieces.append(piece)
+                yield {"type": "token", "text": piece}
+            if not pieces:
+                # Reasoning models (e.g. deepseek-v4-flash) stream internal
+                # chain-of-thought via a separate `reasoning_content` field
+                # before `content` — observed live, intermittently, on the
+                # shared endpoint: a response can exhaust its budget on
+                # reasoning and complete with zero real content. That's not
+                # an exception, so without this check it would silently
+                # report generation_status="llm" with a blank answer. Route
+                # it into the same fallback as a real provider failure.
+                raise RuntimeError("stream completed with no content")
+            generation_status = "llm"
+        except Exception:
+            fallback = build_grounded_answer(question, citations, state["query_type"])
+            pieces = [fallback]
+            yield {"type": "token", "text": fallback}
+            generation_status = "fallback"
+
+        response = CopilotResponse(
+            answer="".join(pieces),
+            confidence=confidence,
+            citations=citations,
+            retrieved_chunk_count=len(citations),
+            model_used=model_name,
+            cache_status=state["cache_status"],
+            query_type=state["query_type"],
+            generation_status=generation_status,
+            rerank_status=state.get("rerank_status", "not_used"),
+        )
+        await self._write_cache({**state, "response": response, "model_name": model_name})
+
+        yield {
+            "type": "done",
+            "citations": [c.model_dump() for c in citations],
+            "confidence": confidence,
+            "model_used": model_name,
+            "generation_status": generation_status,
+            "cache_status": state["cache_status"],
+        }
 
     def _build_graph(self):
         graph = StateGraph(CopilotState)
@@ -225,17 +318,7 @@ class CopilotService:
             )
             return {**state, "response": response}
 
-        citations = [
-            Citation(
-                document_id=document.id,
-                filename=document.metadata.filename,
-                chunk_id=chunk.id,
-                page_number=chunk.page_number,
-                relevance_score=round(score, 4),
-                excerpt=chunk.content[:320],
-            )
-            for score, document, chunk in scored_chunks
-        ]
+        citations = build_citations(scored_chunks)
         model_name = select_model(state["query_type"], self.settings, confidence)
         try:
             answer = await self.llm_provider.generate_answer(state["question"], citations, model_name, state["query_type"])
@@ -313,6 +396,20 @@ def classify_query(question: str) -> str:
     if any(term in lowered for term in ["all documents", "entire manual", "whole manual", "across every"]):
         return "long_context_query"
     return "simple_evidence_query"
+
+
+def build_citations(scored_chunks: List[Tuple[float, DocumentResponse, DocumentChunk]]) -> List[Citation]:
+    return [
+        Citation(
+            document_id=document.id,
+            filename=document.metadata.filename,
+            chunk_id=chunk.id,
+            page_number=chunk.page_number,
+            relevance_score=round(score, 4),
+            excerpt=chunk.content[:320],
+        )
+        for score, document, chunk in scored_chunks
+    ]
 
 
 def select_model(query_type: str, settings: Settings, confidence: str) -> str:

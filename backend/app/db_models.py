@@ -78,6 +78,22 @@ class AuditEventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class IngestionFailureRecord(Base):
+    __tablename__ = "ingestion_failures"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    storage_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
+    error_message: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class CorpusStateRecord(Base):
     __tablename__ = "corpus_state"
 

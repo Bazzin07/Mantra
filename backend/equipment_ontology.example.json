@@ -1,0 +1,10 @@
+{
+  "_comment": "Site equipment ontology override. Point IKI_EQUIPMENT_ONTOLOGY_PATH at a copy of this file to calibrate entity extraction to your plant's tag conventions. 'aliases' map a spelled-out equipment noun to its canonical tag prefix so 'Cooling Tower 3' resolves to the same entity as 'CT-3'. 'prefixes' are short tag prefixes treated as equipment (not vendor part numbers). Both are merged over the built-in ISA-5.1 defaults.",
+  "aliases": {
+    "Cooling Tower": "CT",
+    "Air Handling Unit": "AHU",
+    "Package Unit": "PKG",
+    "Deaerator": "DA"
+  },
+  "prefixes": ["CT", "AHU", "PKG", "DA"]
+}

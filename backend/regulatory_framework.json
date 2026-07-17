@@ -1,0 +1,107 @@
+{
+  "_comment": "Regulatory framework database for Feature 4 (Compliance Intelligence). SYNTHETIC/DEMONSTRATIVE: the requirement text below is a plain-language paraphrase derived from the sample corpus and common Indian industrial-safety practice — it is NOT the verbatim legal text of OISD/PESO/Factory Act/ISO standards and must not be treated as an authoritative regulatory source. Point IKI_REGULATORY_FRAMEWORK_PATH at a copy of this file to calibrate to your site's real, licensed clause text. Each requirement lists 'evidence_keywords' (terms whose presence in a regulation-referencing document counts as coverage) and 'evidence_procedures' (procedure-ID prefixes that satisfy it, e.g. SOP/PM/JSA).",
+  "frameworks": {
+    "OISD-154": {
+      "title": "Maintenance of rotating equipment",
+      "requirements": [
+        {
+          "id": "OISD-154-1",
+          "text": "Rotating-equipment maintenance shall follow a documented lockout and seal-replacement procedure before any intrusive work.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["lockout", "seal"],
+          "evidence_procedures": ["SOP", "PM"]
+        },
+        {
+          "id": "OISD-154-2",
+          "text": "Pressure-relief devices on rotating/pressure equipment shall be tested on the required quarterly cadence with complete records.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["relief valve", "quarterly"],
+          "evidence_procedures": ["PM", "JSA"]
+        },
+        {
+          "id": "OISD-154-3",
+          "text": "Vibration trends for critical rotating equipment shall be monitored and documented under the maintenance programme.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["vibration", "trend"],
+          "evidence_procedures": ["PM"]
+        }
+      ]
+    },
+    "PESO": {
+      "title": "Petroleum & Explosives Safety Organisation — pressure system licensing",
+      "requirements": [
+        {
+          "id": "PESO-1",
+          "text": "A current operating licence shall be held for every regulated pressure system.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["license"],
+          "evidence_procedures": []
+        },
+        {
+          "id": "PESO-2",
+          "text": "Hydrostatic pressure-test certificates shall be on file for all regulated pressure vessels.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["pressure test", "certificate"],
+          "evidence_procedures": ["PM"]
+        }
+      ]
+    },
+    "FACTORYACT": {
+      "title": "Factory Act — worker safety",
+      "requirements": [
+        {
+          "id": "FACTORYACT-1",
+          "text": "Worker safety training records shall be current for all personnel operating rotating or pressure equipment.",
+          "applies_to": ["PERSON", "EQUIPMENT_TAG"],
+          "evidence_keywords": ["training"],
+          "evidence_procedures": ["JSA"]
+        },
+        {
+          "id": "FACTORYACT-2",
+          "text": "Emergency evacuation drills shall be conducted and documented under the Factory Act safety programme.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["evacuation", "drill"],
+          "evidence_procedures": ["JSA"]
+        }
+      ]
+    },
+    "ISO-9001": {
+      "title": "Quality management system",
+      "requirements": [
+        {
+          "id": "ISO-9001-1",
+          "text": "A documented quality-management system shall govern maintenance and inspection activities.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["quality management"],
+          "evidence_procedures": ["SOP"]
+        },
+        {
+          "id": "ISO-9001-2",
+          "text": "Inspection findings shall be recorded against equipment with a disposition and follow-up.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["inspection", "finding"],
+          "evidence_procedures": ["SOP", "PM"]
+        }
+      ]
+    },
+    "ISO-14001": {
+      "title": "Environmental management controls",
+      "requirements": [
+        {
+          "id": "ISO-14001-1",
+          "text": "Environmental controls shall be documented for equipment with environmental impact.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["environmental", "control"],
+          "evidence_procedures": []
+        },
+        {
+          "id": "ISO-14001-2",
+          "text": "Biocide and effluent treatment of cooling systems shall be carried out and recorded on schedule.",
+          "applies_to": ["EQUIPMENT_TAG"],
+          "evidence_keywords": ["biocide", "treatment"],
+          "evidence_procedures": []
+        }
+      ]
+    }
+  }
+}

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     require_api_key: bool = False
     api_key: str = ""
     api_key_header: str = "X-API-Key"
+    rate_limit_per_minute: int = 0  # 0 disables; per client host, per API instance
     max_upload_bytes: int = 25 * 1024 * 1024
     auto_create_schema: bool = True
     chunk_size: int = 500

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from itertools import combinations
 from typing import Dict, Iterable, List, Optional, Protocol, Set, Tuple
 
@@ -11,6 +12,7 @@ from .db_models import (
     DocumentChunkRecord,
     DocumentRecord,
     ExtractedEntityRecord,
+    IngestionFailureRecord,
     SemanticCacheRecord,
 )
 from .models import (
@@ -22,6 +24,7 @@ from .models import (
     ExtractedEntity,
     GraphEdge,
     GraphNode,
+    IngestionFailure,
     KnowledgeGraph,
     SemanticCacheEntry,
 )
@@ -39,7 +42,21 @@ class Repository(Protocol):
 
     async def count_documents(self) -> int: ...
 
+    async def list_documents(self) -> List[DocumentResponse]: ...
+
+    async def add_ingestion_failure(self, failure: IngestionFailure) -> IngestionFailure: ...
+
+    async def list_ingestion_failures(self, limit: int = 200) -> List[IngestionFailure]: ...
+
+    async def get_ingestion_failure(self, failure_id: str) -> Optional[IngestionFailure]: ...
+
+    async def touch_ingestion_failure(self, failure_id: str, error_message: str) -> None: ...
+
+    async def delete_ingestion_failure(self, failure_id: str) -> None: ...
+
     async def add_audit_event(self, event: AuditEvent) -> None: ...
+
+    async def recent_audit_events(self, limit: int = 2000) -> List[AuditEvent]: ...
 
     async def get_corpus_version(self) -> int: ...
 
@@ -90,6 +107,7 @@ class InMemoryRepository:
         self.content_hash_to_document_id: Dict[str, str] = {}
         self.corpus_version = 0
         self.semantic_cache: List[SemanticCacheEntry] = []
+        self.ingestion_failures: Dict[str, IngestionFailure] = {}
 
     async def add_document(self, document: DocumentResponse) -> DocumentResponse:
         self.documents[document.id] = document
@@ -109,8 +127,43 @@ class InMemoryRepository:
     async def count_documents(self) -> int:
         return len(self.documents)
 
+    async def list_documents(self) -> List[DocumentResponse]:
+        return list(self.documents.values())
+
+    async def add_ingestion_failure(self, failure: IngestionFailure) -> IngestionFailure:
+        now = datetime.now(timezone.utc).isoformat()
+        stored = failure.model_copy(update={"created_at": now, "last_attempt_at": now})
+        self.ingestion_failures[stored.id] = stored
+        return stored
+
+    async def list_ingestion_failures(self, limit: int = 200) -> List[IngestionFailure]:
+        return sorted(self.ingestion_failures.values(), key=lambda f: f.created_at, reverse=True)[:limit]
+
+    async def get_ingestion_failure(self, failure_id: str) -> Optional[IngestionFailure]:
+        return self.ingestion_failures.get(failure_id)
+
+    async def touch_ingestion_failure(self, failure_id: str, error_message: str) -> None:
+        existing = self.ingestion_failures.get(failure_id)
+        if existing is None:
+            return
+        self.ingestion_failures[failure_id] = existing.model_copy(
+            update={
+                "error_message": error_message,
+                "attempts": existing.attempts + 1,
+                "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    async def delete_ingestion_failure(self, failure_id: str) -> None:
+        self.ingestion_failures.pop(failure_id, None)
+
     async def add_audit_event(self, event: AuditEvent) -> None:
         return None
+
+    async def recent_audit_events(self, limit: int = 2000) -> List[AuditEvent]:
+        # InMemory audit is fire-and-forget by design (see add_audit_event);
+        # usage/pipeline stats are only meaningful on a durable backend.
+        return []
 
     async def get_corpus_version(self) -> int:
         return self.corpus_version
@@ -219,6 +272,11 @@ class SqlAlchemyRepository:
                 byte_size=document.metadata.byte_size,
                 storage_uri=document.metadata.storage_uri,
                 status=document.status,
+                created_at=(
+                    datetime.fromisoformat(document.metadata.created_at)
+                    if document.metadata.created_at
+                    else datetime.now(timezone.utc)
+                ),
             )
             session.add(record)
             chunk_records = [
@@ -273,6 +331,66 @@ class SqlAlchemyRepository:
         async with self.session_factory() as session:
             result = await session.execute(select(func.count()).select_from(DocumentRecord))
             return int(result.scalar_one())
+
+    async def list_documents(self) -> List[DocumentResponse]:
+        return await self._all_documents(select(DocumentRecord))
+
+    async def add_ingestion_failure(self, failure: IngestionFailure) -> IngestionFailure:
+        async with self.session_factory() as session:
+            record = IngestionFailureRecord(
+                id=failure.id,
+                filename=failure.filename,
+                content_type=failure.content_type,
+                byte_size=failure.byte_size,
+                storage_uri=failure.storage_uri,
+                error_message=failure.error_message,
+                attempts=failure.attempts,
+            )
+            session.add(record)
+            await session.commit()
+            await session.refresh(record)
+            return ingestion_failure_record_to_model(record)
+
+    async def list_ingestion_failures(self, limit: int = 200) -> List[IngestionFailure]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(IngestionFailureRecord).order_by(IngestionFailureRecord.created_at.desc()).limit(limit)
+            )
+            return [ingestion_failure_record_to_model(record) for record in result.scalars().all()]
+
+    async def get_ingestion_failure(self, failure_id: str) -> Optional[IngestionFailure]:
+        async with self.session_factory() as session:
+            record = await session.get(IngestionFailureRecord, failure_id)
+            return ingestion_failure_record_to_model(record) if record else None
+
+    async def touch_ingestion_failure(self, failure_id: str, error_message: str) -> None:
+        async with self.session_factory() as session:
+            record = await session.get(IngestionFailureRecord, failure_id)
+            if record is None:
+                return
+            record.error_message = error_message
+            record.attempts += 1
+            await session.commit()
+
+    async def delete_ingestion_failure(self, failure_id: str) -> None:
+        async with self.session_factory() as session:
+            record = await session.get(IngestionFailureRecord, failure_id)
+            if record is not None:
+                await session.delete(record)
+                await session.commit()
+
+    async def recent_audit_events(self, limit: int = 2000) -> List[AuditEvent]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(AuditEventRecord).order_by(AuditEventRecord.id.desc()).limit(limit)
+            )
+            return [
+                AuditEvent(
+                    method=record.method, path=record.path, status_code=record.status_code,
+                    duration_ms=record.duration_ms, client_host=record.client_host, user_agent=record.user_agent,
+                )
+                for record in result.scalars().all()
+            ]
 
     async def add_audit_event(self, event: AuditEvent) -> None:
         async with self.session_factory() as session:
@@ -619,6 +737,20 @@ class SqlAlchemyRepository:
         return keys
 
 
+def ingestion_failure_record_to_model(record: IngestionFailureRecord) -> IngestionFailure:
+    return IngestionFailure(
+        id=record.id,
+        filename=record.filename,
+        content_type=record.content_type,
+        byte_size=record.byte_size,
+        storage_uri=record.storage_uri,
+        error_message=record.error_message,
+        attempts=record.attempts,
+        created_at=record.created_at.isoformat() if record.created_at else "",
+        last_attempt_at=record.last_attempt_at.isoformat() if record.last_attempt_at else "",
+    )
+
+
 def document_record_to_model(record: DocumentRecord) -> DocumentResponse:
     return DocumentResponse(
         id=record.id,
@@ -631,6 +763,7 @@ def document_record_to_model(record: DocumentRecord) -> DocumentResponse:
             content_hash=record.content_hash,
             byte_size=record.byte_size,
             storage_uri=record.storage_uri,
+            created_at=record.created_at.isoformat() if record.created_at else "",
         ),
         chunks=[
             DocumentChunk(

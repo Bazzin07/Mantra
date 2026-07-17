@@ -11,6 +11,7 @@ class DocumentMetadata(BaseModel):
     content_hash: str
     byte_size: int
     storage_uri: str
+    created_at: str = ""
 
 
 class DocumentChunk(BaseModel):
@@ -172,3 +173,159 @@ class MaintenancePrediction(BaseModel):
     recommendation: str
     urgency: str  # low | medium | high
     justification: List[str]  # historical failures cited as evidence
+
+
+class RequirementResult(BaseModel):
+    requirement_id: str
+    requirement_text: str
+    status: str  # compliant | partial | gap
+    coverage_score: float = Field(ge=0.0, le=1.0)
+    citations: List[Citation] = Field(default_factory=list)
+    action_needed: str = ""
+
+
+class RegulationCompliance(BaseModel):
+    regulation: str
+    title: str
+    requirements: List[RequirementResult]
+    coverage_pct: float = Field(ge=0.0, le=100.0)
+    status_counts: Dict[str, int] = Field(default_factory=dict)  # {compliant, partial, gap}
+
+
+class ComplianceStatus(BaseModel):
+    regulations: List[RegulationCompliance]
+    overall_coverage_pct: float = Field(ge=0.0, le=100.0)
+    framework_disclaimer: str
+
+
+class ComplianceGap(BaseModel):
+    regulation: str
+    requirement_id: str
+    requirement_text: str
+    status: str  # partial | gap
+    evidence: List[Citation] = Field(default_factory=list)
+    action_needed: str
+
+
+class EvidencePackage(BaseModel):
+    regulation: str
+    title: str
+    requirements: List[RequirementResult]
+    coverage_pct: float = Field(ge=0.0, le=100.0)
+    summary: str
+    generation_status: str = "deterministic"
+    disclaimer: str
+
+
+class EquipmentCompliance(BaseModel):
+    equipment_tag: str
+    applicable_regulations: List[str]
+    results: List[RequirementResult]
+
+
+class IncidentAnalysis(BaseModel):
+    document_id: str
+    filename: str
+    contributing_factors: List[str]
+    affected_equipment: List[str]
+    root_cause_summary: str
+    generation_status: str = "deterministic"
+
+
+class FailurePattern(BaseModel):
+    cluster_id: int
+    description: str
+    frequency: int
+    affected_equipment: List[str]
+    severity_trend: str  # escalating | recurring | unclassified
+    document_filenames: List[str]
+
+
+class PatternReport(BaseModel):
+    available: bool
+    reason: Optional[str] = None
+    patterns: List[FailurePattern] = Field(default_factory=list)
+
+
+class SimilarIncident(BaseModel):
+    document_id: str
+    filename: str
+    similarity_score: float = Field(ge=0.0, le=1.0)
+    lessons_learned: str
+
+
+class SimilarIncidentReport(BaseModel):
+    seed_document_id: str
+    seed_filename: str
+    similar_incidents: List[SimilarIncident] = Field(default_factory=list)
+
+
+class FailureWarning(BaseModel):
+    matched: bool
+    matched_pattern_description: Optional[str] = None
+    similarity_score: float = Field(ge=0.0, le=1.0, default=0.0)
+    risk_level: str = "none"  # none | low | medium | high
+    recommended_action: str = ""
+
+
+class DocumentTypeCount(BaseModel):
+    document_type: str
+    count: int
+
+
+class DocumentStats(BaseModel):
+    total_documents: int
+    by_type: List[DocumentTypeCount]
+    by_status: Dict[str, int]
+    earliest_ingested: Optional[str] = None
+    latest_ingested: Optional[str] = None
+
+
+class EndpointUsage(BaseModel):
+    path: str
+    request_count: int
+    avg_duration_ms: float
+    error_count: int
+
+
+class UsageStats(BaseModel):
+    total_requests: int
+    total_errors: int
+    llm_invoking_requests: int
+    by_endpoint: List[EndpointUsage]
+    note: str
+
+
+class PipelineStatus(BaseModel):
+    documents_indexed: int
+    documents_duplicate: int
+    upload_errors_recent: int
+    pending_reprocessing: int
+    note: str
+
+
+class IngestionFailure(BaseModel):
+    id: str
+    filename: str
+    content_type: str
+    byte_size: int
+    storage_uri: str
+    error_message: str
+    attempts: int = 1
+    created_at: str = ""
+    last_attempt_at: str = ""
+
+
+class AdminOverview(BaseModel):
+    documents: DocumentStats
+    usage: UsageStats
+    pipeline: PipelineStatus
+
+
+class DocumentSummary(BaseModel):
+    id: str
+    filename: str
+    document_type: str
+    status: str
+    byte_size: int
+    created_at: str
