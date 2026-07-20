@@ -265,9 +265,36 @@ const StreamDoneFrameSchema = z.object({
 const StreamFrameSchema = z.discriminatedUnion("type", [StreamTokenFrameSchema, StreamDoneFrameSchema]);
 export type StreamFrame = z.infer<typeof StreamFrameSchema>;
 
+// VITE_API_URL is unset in local dev (Vite's proxy handles relative /api/*
+// calls and injects the key server-side, per vite.config.ts) and set to the
+// deployed backend's absolute origin in production builds (e.g. Amplify),
+// where there is no proxy. Either way the browser never sends an API key —
+// Caddy injects it server-side in production, matching the dev-proxy pattern.
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
+const apiUrl = (path: string) => `${API_BASE}${path}`;
+
+// FastAPI returns `detail` as a string for HTTPExceptions but as an array of
+// {loc,msg,...} objects for 422 request-validation errors. Coerce both (and any
+// unexpected shape) into a readable string so the UI never shows "[object
+// Object]" or an empty error.
+function errorMessage(detail: unknown, r: Response): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const msg = detail
+      .map((d) => (d && typeof d === "object" && "msg" in d ? String((d as { msg: unknown }).msg) : JSON.stringify(d)))
+      .filter(Boolean)
+      .join("; ");
+    if (msg) return msg;
+  }
+  return `${r.status} ${r.statusText}`;
+}
+
 async function json<T>(schema: z.ZodType<T>, p: Promise<Response>): Promise<T> {
   const r = await p;
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status} ${r.statusText}`);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(errorMessage((body as { detail?: unknown }).detail, r));
+  }
   const parsed = schema.safeParse(await r.json());
   if (!parsed.success) {
     console.error("API response failed validation:", parsed.error.issues);
@@ -279,62 +306,62 @@ async function json<T>(schema: z.ZodType<T>, p: Promise<Response>): Promise<T> {
 export const uploadDoc = (file: File) => {
   const fd = new FormData();
   fd.append("file", file);
-  return json(DocSchema, fetch("/api/documents/upload", { method: "POST", body: fd }));
+  return json(DocSchema, fetch(apiUrl("/api/documents/upload"), { method: "POST", body: fd }));
 };
 
 export const ask = (question: string) =>
   json(
     AnswerSchema,
-    fetch("/api/copilot/ask", {
+    fetch(apiUrl("/api/copilot/ask"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, limit: 4 }),
     }),
   );
 
-export const getGraph = () => json(GraphSchema, fetch("/api/knowledge-graph"));
-export const health = () => fetch("/api/health").then((r) => r.json());
+export const getGraph = () => json(GraphSchema, fetch(apiUrl("/api/knowledge-graph")));
+export const health = () => fetch(apiUrl("/api/health")).then((r) => r.json());
 
 export const getRCA = (equipmentTag: string) =>
-  json(RCAReportSchema, fetch(`/api/maintenance/rca/${encodeURIComponent(equipmentTag)}`, { method: "POST" }));
+  json(RCAReportSchema, fetch(apiUrl(`/api/maintenance/rca/${encodeURIComponent(equipmentTag)}`), { method: "POST" }));
 export const getEquipmentHealth = (equipmentTag: string) =>
-  json(EquipmentHealthSchema, fetch(`/api/maintenance/health/${encodeURIComponent(equipmentTag)}`));
-export const getPredictions = () => json(z.array(MaintenancePredictionSchema), fetch("/api/maintenance/predictions"));
-export const getClusters = () => json(FailureClusterReportSchema, fetch("/api/maintenance/clusters"));
+  json(EquipmentHealthSchema, fetch(apiUrl(`/api/maintenance/health/${encodeURIComponent(equipmentTag)}`)));
+export const getPredictions = () => json(z.array(MaintenancePredictionSchema), fetch(apiUrl("/api/maintenance/predictions")));
+export const getClusters = () => json(FailureClusterReportSchema, fetch(apiUrl("/api/maintenance/clusters")));
 export const investigate = (question: string) =>
   json(
     RCAReportSchema,
-    fetch("/api/maintenance/investigate", {
+    fetch(apiUrl("/api/maintenance/investigate"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, limit: 4 }),
     }),
   );
 
-export const getComplianceStatus = () => json(ComplianceStatusSchema, fetch("/api/compliance/status"));
-export const getComplianceGaps = () => json(z.array(ComplianceGapSchema), fetch("/api/compliance/gaps"));
+export const getComplianceStatus = () => json(ComplianceStatusSchema, fetch(apiUrl("/api/compliance/status")));
+export const getComplianceGaps = () => json(z.array(ComplianceGapSchema), fetch(apiUrl("/api/compliance/gaps")));
 export const getAuditPackage = (regulation: string) =>
-  json(EvidencePackageSchema, fetch(`/api/compliance/audit/${encodeURIComponent(regulation)}`, { method: "POST" }));
+  json(EvidencePackageSchema, fetch(apiUrl(`/api/compliance/audit/${encodeURIComponent(regulation)}`), { method: "POST" }));
 
-export const getAdminOverview = () => json(AdminOverviewSchema, fetch("/api/admin/overview"));
+export const getAdminOverview = () => json(AdminOverviewSchema, fetch(apiUrl("/api/admin/overview")));
 export const getDocuments = (documentType?: string, equipmentTag?: string) => {
   const params = new URLSearchParams();
   if (documentType) params.set("document_type", documentType);
   if (equipmentTag) params.set("equipment_tag", equipmentTag);
   const qs = params.toString();
-  return json(z.array(DocumentSummarySchema), fetch(`/api/documents${qs ? `?${qs}` : ""}`));
+  return json(z.array(DocumentSummarySchema), fetch(apiUrl(`/api/documents${qs ? `?${qs}` : ""}`)));
 };
 
-export const getIngestionFailures = () => json(z.array(IngestionFailureSchema), fetch("/api/admin/ingestion-failures"));
+export const getIngestionFailures = () => json(z.array(IngestionFailureSchema), fetch(apiUrl("/api/admin/ingestion-failures")));
 export const reprocessIngestionFailure = (failureId: string) =>
-  json(DocSchema, fetch(`/api/admin/ingestion-failures/${encodeURIComponent(failureId)}/reprocess`, { method: "POST" }));
+  json(DocSchema, fetch(apiUrl(`/api/admin/ingestion-failures/${encodeURIComponent(failureId)}/reprocess`), { method: "POST" }));
 export const dismissIngestionFailure = (failureId: string) =>
-  fetch(`/api/admin/ingestion-failures/${encodeURIComponent(failureId)}`, { method: "DELETE" }).then((r) => {
+  fetch(apiUrl(`/api/admin/ingestion-failures/${encodeURIComponent(failureId)}`), { method: "DELETE" }).then((r) => {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   });
 
 export async function* streamAsk(question: string): AsyncGenerator<StreamFrame> {
-  const response = await fetch("/api/copilot/stream", {
+  const response = await fetch(apiUrl("/api/copilot/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, limit: 4 }),
@@ -357,8 +384,8 @@ export async function* streamAsk(question: string): AsyncGenerator<StreamFrame> 
   }
 }
 
-export const getFailurePatterns = () => json(PatternReportSchema, fetch("/api/failures/patterns"));
+export const getFailurePatterns = () => json(PatternReportSchema, fetch(apiUrl("/api/failures/patterns")));
 export const getSimilarIncidents = (documentId: string) =>
-  json(SimilarIncidentReportSchema, fetch(`/api/failures/similar/${encodeURIComponent(documentId)}`));
+  json(SimilarIncidentReportSchema, fetch(apiUrl(`/api/failures/similar/${encodeURIComponent(documentId)}`)));
 export const getIncidentAnalysis = (documentId: string) =>
-  json(IncidentAnalysisSchema, fetch(`/api/failures/analysis/${encodeURIComponent(documentId)}`));
+  json(IncidentAnalysisSchema, fetch(apiUrl(`/api/failures/analysis/${encodeURIComponent(documentId)}`)));

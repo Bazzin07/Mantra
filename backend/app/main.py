@@ -125,6 +125,17 @@ def create_app(settings: Optional[Settings] = None, repository: Optional[Reposit
         allow_headers=["*"],
     )
 
+    def client_ip(request: Request) -> str:
+        # trust_proxy_headers must only be enabled when the app is unreachable
+        # except through the proxy (e.g. bound to localhost behind Caddy) —
+        # otherwise a direct caller can spoof X-Forwarded-For to dodge the
+        # rate limit or poison the audit log with someone else's IP.
+        if settings.trust_proxy_headers:
+            forwarded = request.headers.get("x-forwarded-for")
+            if forwarded:
+                return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else "unknown"
+
     async def require_api_key(x_api_key: Optional[str] = Header(default=None, alias=settings.api_key_header)) -> None:
         if not settings.require_api_key:
             return
@@ -144,7 +155,7 @@ def create_app(settings: Optional[Settings] = None, repository: Optional[Reposit
     async def rate_limit(request: Request, call_next):
         limit = settings.rate_limit_per_minute
         if limit > 0 and request.url.path != "/api/health":
-            host = request.client.host if request.client else "unknown"
+            host = client_ip(request)
             window = int(time.time() // 60)
             stored_window, count = rate_hits.get(host, (window, 0))
             count = count + 1 if stored_window == window else 1
@@ -176,7 +187,7 @@ def create_app(settings: Optional[Settings] = None, repository: Optional[Reposit
                             path=request.url.path,
                             status_code=status_code,
                             duration_ms=duration_ms,
-                            client_host=request.client.host if request.client else "",
+                            client_host=client_ip(request),
                             user_agent=request.headers.get("user-agent", ""),
                         )
                     )

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     api_key: str = ""
     api_key_header: str = "X-API-Key"
     rate_limit_per_minute: int = 0  # 0 disables; per client host, per API instance
+    trust_proxy_headers: bool = False  # only enable behind a trusted reverse proxy (e.g. Caddy) that overwrites X-Forwarded-For
     max_upload_bytes: int = 25 * 1024 * 1024
     auto_create_schema: bool = True
     chunk_size: int = 500
@@ -47,6 +48,12 @@ class Settings(BaseSettings):
     utility_model: str = "meta/llama-3.1-8b-instruct"
     default_answer_model: str = "deepseek-ai/deepseek-v4-flash"
     baseline_answer_model: str = "meta/llama-3.1-8b-instruct"
+    # Non-streaming narrative tasks (RCA, compliance audit, incident analysis)
+    # summarize already-computed structured data — they don't need the deep
+    # reasoning model, and on the blocking post() path a reasoning model's
+    # discarded chain-of-thought costs the full latency (~55s observed) with no
+    # streaming to hide it. A fast instruct model does the summary in ~3-5s.
+    summary_model: str = "meta/llama-3.1-8b-instruct"
     escalation_model: str = "deepseek-ai/deepseek-v4-flash"
     long_context_model: str = "deepseek-ai/deepseek-v4-flash"
     safety_model: str = "nvidia/llama-3.1-nemoguard-8b-content-safety"

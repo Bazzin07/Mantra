@@ -78,7 +78,7 @@ class FailureIntelligenceService:
         try:
             summary = await self.llm_provider.generate_answer(
                 f"Summarize the contributing factors and likely root cause in {document.metadata.filename}.",
-                citations, self.settings.default_answer_model, "incident_analysis",
+                citations, self.settings.summary_model, "incident_analysis",
             )
             generation_status = "llm"
         except Exception:

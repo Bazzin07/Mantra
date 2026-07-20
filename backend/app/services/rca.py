@@ -72,11 +72,28 @@ class RCAService:
         self.settings = settings or Settings()
         self.llm_provider = llm_provider or DeterministicLLMProvider()
         self.entity_extractor = IndustrialEntityExtractor()
+        # ponytail: in-process RCA result cache keyed by (seed_type, seed_value),
+        # invalidated whenever the corpus version changes (new document ingested).
+        # RCA output is deterministic for a given corpus, and judges click the
+        # same handful of equipment tags repeatedly — this turns the ~5s LLM
+        # narrative into an instant repeat response. Per-instance; fine for the
+        # single-container demo topology.
+        self._rca_cache: Dict[Tuple[str, str], RCAReport] = {}
+        self._rca_cache_version = -1
 
     # ------------------------------------------------------------------
     # FR-18: RCA chain detection
     # ------------------------------------------------------------------
     async def rca(self, seed_type: str, seed_value: str) -> RCAReport:
+        corpus_version = await self.repository.get_corpus_version()
+        if corpus_version != self._rca_cache_version:
+            self._rca_cache.clear()
+            self._rca_cache_version = corpus_version
+        cache_key = (seed_type, seed_value)
+        cached = self._rca_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         graph = await self.repository.build_graph_for_entity(seed_type, seed_value)
         documents = await self.repository.documents_for_entity(seed_type, seed_value)
         normalized_seed = normalize_graph_value(seed_type, seed_value)
@@ -120,7 +137,7 @@ class RCAService:
             )
 
         evidence_citations = [citation for chain in chains for link in chain.links for citation in link.citations]
-        model_name = self.settings.default_answer_model
+        model_name = self.settings.summary_model
         try:
             narrative = await self.llm_provider.generate_answer(
                 f"Investigate the potential root cause chain for {seed_value}.",
@@ -133,9 +150,11 @@ class RCAService:
             narrative = _hedged_fallback_narrative(seed_value, chains)
             generation_status = "fallback"
 
-        return RCAReport(
+        report = RCAReport(
             seed=seed_value, chains=chains, narrative=narrative, generation_status=generation_status, model_used=model_name
         )
+        self._rca_cache[cache_key] = report
+        return report
 
     def _score_chain(
         self,

@@ -141,7 +141,7 @@ class ComplianceService:
                 generation_status="skipped_no_evidence", disclaimer=DISCLAIMER,
             )
 
-        model_name = self.settings.default_answer_model
+        model_name = self.settings.summary_model
         try:
             summary = await self.llm_provider.generate_answer(
                 f"Summarize the compliance posture for {regulation} ({spec['title']}) based on the evidence.",

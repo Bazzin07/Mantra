@@ -1,6 +1,8 @@
 .env
+.env.*
 *.env
 backend/.env
+backend/.env.*
 .local/
 .test-storage/
 .pytest_cache/
